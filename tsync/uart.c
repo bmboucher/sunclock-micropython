@@ -14,9 +14,6 @@
 #define UART_SM 0
 #define RESET_SLEEP_TIME 500
 
-// counter for bad frames
-uint rx_errors = 0;
-
 static bool uart_configured = false;
 static void init_uart_tx() {
     uint offset_tx = pio_add_program(UART_PIO, &uart_tx_program);
@@ -54,7 +51,7 @@ NO_ARG_MP_FUNCTION(update_uart_tx_buffer, {
 
 NO_ARG_MP_FUNCTION(update_uart_rx_buffer, {
     if (is_primary) return;   // only rx on secondary
-
+    if (!uart_configured) init_uart();
     uint index = 0;
     uint16_t checksum = 0;
     while (!core1_cancel) {
@@ -84,6 +81,7 @@ NO_ARG_MP_FUNCTION(update_uart_rx_buffer, {
 
 NO_ARG_MP_FUNCTION(uart_tx_send, {
     if (!is_primary) return;   // only tx from primary
+    if (!uart_configured) init_uart();
 
     for (uint i = 0; i < N_TUBES_HALF + 2; i++) {
         uart_tx_program_put(UART_PIO, UART_SM, uart_buffer[i]);

@@ -83,7 +83,7 @@ MP_DECLARE_CONST_FUN_OBJ_1(tsync_fixed_point_exp_obj);
 // calculate e^(-input^2) in 16.16 fixed-point
 uint32_t fixed_point_gaussian(uint32_t input);
 // tsync.fixed_point_gaussian(input: int|float) -> int|float
-MP_DECLARE_CONST_FUN_OBJ_1(tsync_fixed_point_exp_obj);
+MP_DECLARE_CONST_FUN_OBJ_1(tsync_fixed_point_gaussian_obj);
 
 #define DEFAULT_HAND_FLAGS 0b00000111
 
@@ -118,7 +118,7 @@ NO_ARG_MP_FUNCTION_DECL(uart_tx_send);
 // tsync.get_pwm_bits() -> int
 MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_pwm_bits_obj);
 // tsync.set_pwm_bits(pwm_bits: int) -> None
-MP_DECLARE_CONST_FUN_OBJ_1(tsync_set_pwm_bits_ob);
+MP_DECLARE_CONST_FUN_OBJ_1(tsync_set_pwm_bits_obj);
 
 // updates the pwm_duty buffer from pwm_raw/pwm_lo/pwm_hi/pwm_bits
 NO_ARG_MP_FUNCTION_DECL(update_pwm_duty);

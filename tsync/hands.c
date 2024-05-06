@@ -96,14 +96,14 @@ void update_pwm_raw_from_hands(uint8_t hand_flags)
     for (uint h = 0; h < N_HANDS; h++)
     {
         if (hand_flags & 1) {
-            calculate_single_hand(hand_pos[h], hand_k[h], hand_A[h]);
+            update_single_hand(hand_pos[h], hand_k[h], hand_A[h]);
         }
         hand_flags = hand_flags >> 1;
     }
 }
 
 // tsync.update_pwm_raw_from_hands(hand_flags: int = 7)
-static mp_obj_t tsync_update_pwm_raw_from_hands(mp_uint_t n_args, mp_obj_t* args) {
+static mp_obj_t tsync_update_pwm_raw_from_hands(mp_uint_t n_args, const mp_obj_t* args) {
     uint8_t hand_flags = DEFAULT_HAND_FLAGS; // default is to draw all 3 hands
     if (n_args > 0) {
         if (!(mp_obj_is_int(args[0]))) {
@@ -122,15 +122,15 @@ MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(tsync_update_pwm_raw_from_hands_obj, 0, 1, t
 
 void update_pwm_raw_from_single_gaussian(uint16_t pos, uint32_t k, uint32_t A) {
     memset(pwm_raw, 0, sizeof(uint32_t) * N_TUBES);
-    calculate_single_hand(pos, k, A);
+    update_single_hand(pos, k, A);
 }
 static mp_obj_t tsync_update_pwm_raw_from_single_gaussian(mp_obj_t pos_obj, mp_obj_t k_obj, mp_obj_t A_obj) {
     if (!mp_obj_is_int(pos_obj) || !mp_obj_is_int(k_obj) || !mp_obj_is_int(A_obj)) {
         mp_raise_TypeError("All inputs must be ints");
     }
     uint16_t pos = mp_obj_get_int(pos_obj);
-    uint32_t k = mp_obj_get_k(k_obj);
-    uint32_t A = mp_obj_get_A(A_obj);
+    uint32_t k = mp_obj_get_int(k_obj);
+    uint32_t A = mp_obj_get_int(A_obj);
     update_pwm_raw_from_single_gaussian(pos, k, A);
     return mp_const_none;
 }

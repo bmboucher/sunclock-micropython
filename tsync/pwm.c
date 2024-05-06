@@ -46,7 +46,7 @@ static mp_obj_t tsync_set_pwm_bits(mp_obj_t pwm_bits_obj) {
         mp_raise_TypeError("pwm_bits must be an integer");
     }
     int pwm_bits_in = mp_obj_get_int(pwm_bits_obj);
-    if (pwm_bits_in < 2 | pwm_bits_in > 15) {
+    if (pwm_bits_in < 2 || pwm_bits_in > 15) {
         mp_raise_ValueError("pwm_bits must be in range 2..15");
     }
     pwm_bits = pwm_bits_in;
