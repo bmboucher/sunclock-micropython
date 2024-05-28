@@ -7,6 +7,13 @@
 
 /****** CONSTANTS *******/
 
+// all fixed-point values are assumed to be 16.16 unless otherwise noted
+// i.e. to multiply 16.16 a by 16.16 b we use ((a*b)>>16)
+
+#define FP_1_0  (1<<16)
+#define FP_0_5  (1<<15)
+#define FP_0_25 (1<<14)
+
 // number of tubes handled by each pico
 #define N_TUBES_HALF 12
 
@@ -16,12 +23,18 @@
 // number of hands (hour/minute/second)
 #define N_HANDS 3
 
+// assume e^(-x^2) is 0 outside this many std devs
+#define GAUSS_LIMIT 4
+#define GAUSS_LIMIT_UINT (GAUSS_LIMIT<<16)
+
 /****** GLOBAL VARIABLES *******/
 
 GLOBAL_FLAG_DECL(is_primary);
 GLOBAL_FLAG_RO_DECL(core1_running);
 GLOBAL_FLAG_DECL(core1_cancel);
-GLOBAL_FLAG_DECL(manual_draw);
+GLOBAL_FLAG_DECL(manual_hand_pos);
+GLOBAL_FLAG_DECL(manual_pwm_raw);
+GLOBAL_FLAG_DECL(manual_pwm_duty);
 GLOBAL_RO_INT_DECL(rx_errors);
 GLOBAL_RO_INT_DECL(frame_rate);
 
@@ -31,6 +44,7 @@ GLOBAL_RO_INT_DECL(frame_rate);
 
 // last clock time read
 extern uint16_t time[7]; // y,m,d,h,m,s,ms
+extern int32_t time_adj[4]; // h,m,s,ms
 
 // "hands" are gaussian distributions A*exp(-(k*x)^2) where A,k may vary by hand
 extern uint32_t hand_k[N_HANDS];
@@ -56,22 +70,41 @@ extern uint8_t tube_map[N_TUBES];
 extern uint8_t pin_map[N_TUBES];  // {0..22, 26}
 
 // send/receive buffer for UART
-extern uint16_t uart_buffer[N_TUBES_HALF + 2]; // start data[0] ... data[11] checksum
+extern uint16_t i2c_buffer[N_TUBES_HALF + 2]; // start data[0] ... data[11] checksum
 
-// tsync.get_buffers() -> Tuple[memoryview, ...]
-MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_buffers_obj);
+// Python methods tsync.get_<buffer>() -> memoryview
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_time_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_time_adj_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_hand_k_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_hand_A_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_hand_pos_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_pwm_raw_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_pwm_lo_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_pwm_hi_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_pwm_duty_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_tube_map_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_pin_map_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_i2c_buffer_obj);
 
 /****** CLOCK *******/
-
-// initializes the ticks_us_offset used to calculate ticks_us
-// call this whenever we update the rtc (e.g. from ntptime)
-NO_ARG_MP_FUNCTION_DECL(init_time);
 
 // updates the values in time from the rtc and ticks_us
 NO_ARG_MP_FUNCTION_DECL(update_time);
 
 // updates hand_pos based on time
 NO_ARG_MP_FUNCTION_DECL(update_hand_pos);
+
+// tsync.epoch_millis(local: bool = True) -> int
+MP_DECLARE_CONST_FUN_OBJ_VAR_BETWEEN(tsync_epoch_millis_obj);
+
+// tsync.epoch_seconds_float(local: bool = True) -> float
+MP_DECLARE_CONST_FUN_OBJ_VAR_BETWEEN(tsync_epoch_seconds_float_obj);
+
+// tsync.localtime() -> Tuple[int,int,int,int,int,int,int]
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_localtime_obj);
+
+// tsync.get_dst_info() -> Tuple[bool,int,int]
+MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_dst_info_obj);
 
 /****** HANDS *******/
 
@@ -100,20 +133,22 @@ MP_DECLARE_CONST_FUN_OBJ_3(tsync_update_pwm_raw_from_single_gaussian_obj);
 
 /****** UART *******/
 
-// updates uart_buffer from pwm_duty (only on primary)
-NO_ARG_MP_FUNCTION_DECL(update_uart_tx_buffer);
+// updates i2c_buffer from pwm_duty (only on primary)
+NO_ARG_MP_FUNCTION_DECL(update_i2c_tx_buffer);
 
-// updates uart_buffer from the UART - will block until a value frame is received
-NO_ARG_MP_FUNCTION_DECL(update_uart_rx_buffer);
+// updates i2c_buffer from the UART - will block until a value frame is received
+NO_ARG_MP_FUNCTION_DECL(update_i2c_rx_buffer);
 
-// sends the contents of uart_buffer via UART
-NO_ARG_MP_FUNCTION_DECL(uart_tx_send);
+// sends the contents of i2c_buffer via UART
+NO_ARG_MP_FUNCTION_DECL(i2c_tx_send);
 
 /****** PWM *******/
 
 // pwm_bits is the bit accuracy of the generated PWM
 // more bits -> lower frequency, default is 11 bits ~= 60kHz
 // allow this to be configured from Python (must match b/w primary and secondary)
+
+extern uint8_t pwm_bits;
 
 // tsync.get_pwm_bits() -> int
 MP_DECLARE_CONST_FUN_OBJ_0(tsync_get_pwm_bits_obj);
@@ -126,7 +161,13 @@ NO_ARG_MP_FUNCTION_DECL(update_pwm_duty);
 // applies (half) the values in pwm_duty to the pwm outputs
 NO_ARG_MP_FUNCTION_DECL(paint_pwm);
 
+void setup_pwm();
+
 /****** CORE1 *******/
+
+NO_ARG_MP_FUNCTION_DECL(draw_loop_primary);
+
+NO_ARG_MP_FUNCTION_DECL(draw_loop_secondary);
 
 NO_ARG_MP_FUNCTION_DECL(core1_init);
 

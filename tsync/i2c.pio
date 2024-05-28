@@ -1,0 +1,120 @@
+.program i2c_tx
+.side_set 1
+
+start:
+    pull            side 1;     Stall until read from FIFO with clk HI
+    set x, 15       side 1;     Preload bit counter
+bitloop:
+    out pins, 1     side 0 [3]; Set data pin, set clk LOW
+    nop             side 1 [2]; Set clk HI
+    jmp x-- bitloop side 1;     Advance to next bit
+    set x, 31       side 1;     Preload cycle counter for 128 cycles (32x4)
+endloop:
+    jmp x-- endloop side 1 [3]; Hold clk HI
+
+% c-sdk {
+
+#define I2C_PIO pio0
+#define I2C_SM 0
+#define I2C_CLKDIV_TX 32  // corresponds to ~400kHz frequency on CLK
+#define I2C_CLKDIV_RX 4   // rx clock is 8x faster
+#define PIN_DATA 27
+#define PIN_CLK 28
+#define PINMASK ((1u<<PIN_CLK)|(1u<<PIN_DATA))
+
+static inline void i2c_tx_program_init() {
+    // PIO pins initially output HI
+    pio_sm_set_pins_with_mask(I2C_PIO, I2C_SM, PINMASK, PINMASK);
+    pio_sm_set_pindirs_with_mask(I2C_PIO, I2C_SM, PINMASK, PINMASK);
+
+    // assign pins to pio0
+    pio_gpio_init(I2C_PIO, PIN_DATA);
+    pio_gpio_init(I2C_PIO, PIN_CLK);
+
+    // load PIO program, init config
+    uint offset = pio_add_program(I2C_PIO, &i2c_tx_program);
+    pio_sm_config c = i2c_tx_program_get_default_config(offset);
+
+    // configure output (right shift, no autopull, PIN_DATA output, PIN_CLK side)
+    sm_config_set_out_shift(&c, true, false, 32);
+    sm_config_set_out_pins(&c, PIN_DATA, 1);
+    sm_config_set_sideset_pins(&c, PIN_CLK);
+
+    // 8 word fifo (only doing tx)
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    // clock divider (tx is slower than rx)
+    sm_config_set_clkdiv_int_frac(&c, I2C_CLKDIV_TX, 0);
+
+    // initialize and start state machine
+    pio_sm_init(I2C_PIO, I2C_SM, offset, &c);
+    pio_sm_set_enabled(I2C_PIO, I2C_SM, true);
+}
+
+static inline void i2c_tx_program_put(uint16_t value) {
+    pio_sm_put_blocking(I2C_PIO, I2C_SM, value);
+}
+
+%}
+
+.program i2c_rx
+
+badstart:
+    wait 1 pin 1;            Wait for clk to go HI
+    set x, 15;               Start cycle counter for 16x16x2 rx cycles = 64 tx cycles
+goodouter:
+    set y, 15;               
+goodinner:
+    jmp pin initloop;        If clk is still HI, decrement and loop
+    jmp badstart;            Otherwise reset the count
+initloop:
+    jmp y-- goodinner;
+    jmp x-- goodouter;       When clk has been HI long enough, start reading
+    set x, 15;               Preload bit counter
+bitloop:
+    wait 0 pin 1;            Wait for the clk to go LOW...
+    wait 1 pin 1;            ... then HI again
+    in pins, 1;              Read in the data
+    jmp x-- bitloop;         Decrement and loop until 16 bits are read
+    push;                    Push read value to FIFO
+
+% c-sdk {
+
+static inline void i2c_rx_program_init() {
+    // PIO pins initially input
+    pio_sm_set_pindirs_with_mask(I2C_PIO, I2C_SM, 0, PINMASK);
+
+    // assign pins to pio0
+    pio_gpio_init(I2C_PIO, PIN_DATA);
+    pio_gpio_init(I2C_PIO, PIN_CLK);
+
+    // load PIO program, init config
+    uint offset = pio_add_program(I2C_PIO, &i2c_rx_program);
+    pio_sm_config c = i2c_rx_program_get_default_config(offset);
+
+    // configure input (right shift, no autopush, PIN_DATA is pin 0, PIN_CLK is pin 1)
+    sm_config_set_in_shift(&c, true, false, 32);
+    sm_config_set_in_pins(&c, PIN_DATA);
+
+    // use PIN_CLK for JMP branching
+    sm_config_set_jmp_pin(&c, PIN_CLK);
+
+    // 8 word fifo (only doing rx)
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+    // clock divider (rx is faster than tx)
+    sm_config_set_clkdiv_int_frac(&c, I2C_CLKDIV_RX, 0);
+
+    // initialize and start state machine
+    pio_sm_init(I2C_PIO, I2C_SM, offset, &c);
+    pio_sm_set_enabled(I2C_PIO, I2C_SM, true);
+}
+
+static inline uint16_t i2c_rx_program_get(bool* cancelled) {
+    uint32_t *rxfifo = (uint32_t*)&I2C_PIO->rxf[I2C_SM];
+    while (pio_sm_is_rx_fifo_empty(I2C_PIO, I2C_SM) && !(*cancelled))
+        tight_loop_contents();
+    return (uint16_t)(((uint32_t)*rxfifo) >> 16);
+}
+
+%}

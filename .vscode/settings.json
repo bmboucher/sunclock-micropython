@@ -79,7 +79,10 @@
         "pio.h": "c",
         "string.h": "c",
         "runtime.h": "c",
-        "typeinfo": "c"
+        "typeinfo": "c",
+        "tsync_macros.h": "c",
+        "random": "c",
+        "limits": "c"
     },
     "C_Cpp.vcFormat.newLine.beforeOpenBrace.block": "sameLine",
     "C_Cpp.vcFormat.newLine.beforeOpenBrace.function": "sameLine",

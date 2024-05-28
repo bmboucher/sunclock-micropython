@@ -12,6 +12,18 @@ MP_DEFINE_CONST_FUN_OBJ_0(tsync_##name##_obj, tsync_##name)
 extern uint name; \
 MP_DECLARE_CONST_FUN_OBJ_0(tsync_##name##_obj)
 
+#define GLOBAL_INT(name) \
+GLOBAL_RO_INT(name) \
+static mp_obj_t tsync_set_##name(mp_obj_t value) { \
+    name = mp_obj_get_int(value); \
+    return mp_const_none; \
+} \
+MP_DEFINE_CONST_FUN_OBJ_1(tsync_set_##name##_obj, tsync_set_##name)
+
+#define GLOBAL_INT_DECL(name) \
+GLOBAL_RO_INT_DECL(name) \
+MP_DECLARE_CONST_FUN_OBJ_1(tsync_set_##name##_obj)
+
 #define GLOBAL_FLAG_RO(name) \
 bool name = false; \
 static mp_obj_t tsync_##name(void) { \

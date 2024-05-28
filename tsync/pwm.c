@@ -10,28 +10,32 @@
 // 11-bits we get a PWM frequency of ~61kHz. This also allows the UART to be
 // defined as 16n1 and we can use the leading bits for other things.
 #define DEFAULT_PWM_BITS 11
-static uint8_t pwm_bits = DEFAULT_PWM_BITS;
 static uint16_t pwm_mask = (1 << (1 + DEFAULT_PWM_BITS)) - 1;
 
-static bool pwm_configured = false;
-static void setup_pwm() {
-    // set all pwm slices to the same frequency
-    const uint16_t wrap = 1 << pwm_bits;
-    for (uint slice = 0; slice < NUM_PWM_SLICES; slice++) {
-        pwm_set_clkdiv_int_frac(slice, 1, 0);
-        pwm_set_wrap(slice, wrap);
-    }
-
+uint8_t pwm_bits = DEFAULT_PWM_BITS;
+static uint8_t pwm_bits_configured = 0;
+void setup_pwm() {
     // set 12 pins to output from pwm and 12 to high-impedance
     for (uint i = 0; i < N_TUBES_HALF; i++) {
         const uint active = is_primary ? i : i + N_TUBES_HALF;
         const uint disabled = is_primary ? i + N_TUBES_HALF : i;
+        gpio_init(pin_map[active]);
+        gpio_set_dir(pin_map[active], GPIO_OUT);
         gpio_set_function(pin_map[active], GPIO_FUNC_PWM);
         pwm_set_gpio_level(pin_map[active], 0);
         gpio_init(pin_map[disabled]);
         gpio_set_dir(pin_map[disabled], GPIO_IN);
     }
-    pwm_configured = true;
+
+    // set all pwm slices to the same frequency
+    pwm_bits_configured = pwm_bits;
+    const uint16_t wrap = 1 << pwm_bits_configured;
+    for (uint slice = 0; slice < NUM_PWM_SLICES; slice++) {
+        pwm_set_clkdiv_int_frac(slice, 1, 0);
+        pwm_set_wrap(slice, wrap);
+        pwm_set_output_polarity(slice, false, false);
+        pwm_set_enabled(slice, true);
+    }
 }
 
 // tsync.get_pwm_bits() -> int
@@ -62,16 +66,19 @@ NO_ARG_MP_FUNCTION(update_pwm_duty, {
         const uint8_t tube = tube_map[i];
 
         const uint32_t raw = pwm_raw[tube];                  // 16.16 [0,1]
-        const uint32_t lo = (uint32_t)pwm_lo[tube];          // 32.0 [0,2^16)
-        const uint32_t diff = (uint32_t)pwm_hi[tube] - lo;   // 32.0 [0,2^16)
-        // 16.16 [0,1] x 32.0 [0,2^16) = 16.16 [0,2^16) -> rescale to 16.0 [0,2^16)
-        const uint16_t interp = (uint16_t)(lo + ((diff * raw) >> 16));
-        pwm_duty[tube] = interp >> (16 - pwm_bits);
+        uint16_t value = pwm_hi[tube];
+        if (raw < FP_1_0) {
+            const uint32_t lo = (uint32_t)pwm_lo[tube];          // 32.0 [0,2^16)
+            const uint32_t diff = (uint32_t)pwm_hi[tube] - lo;   // 32.0 [0,2^16)
+            // 16.16 [0,1] x 32.0 [0,2^16) = 16.16 [0,2^16) -> rescale to 16.0 [0,2^16)
+            value = (uint16_t)(lo + ((diff * raw) >> 16));
+        }
+        pwm_duty[tube] = value >> (16 - pwm_bits);
     }
 })
 
 NO_ARG_MP_FUNCTION(paint_pwm, {
-    if (!pwm_configured) setup_pwm();
+    if (pwm_bits != pwm_bits_configured) setup_pwm();
     for (uint i = 0; i < N_TUBES_HALF; i++) {
         const uint slot = is_primary ? i : i + N_TUBES_HALF;
         const uint pin = pin_map[slot];

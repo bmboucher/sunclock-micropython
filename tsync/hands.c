@@ -1,16 +1,6 @@
 #include "tsync.h"
 #include <string.h>
 
-// all fixed-point values are assumed to be 16.16 unless otherwise noted
-// i.e. to multiply 16.16 a by 16.16 b we use ((a*b)>>16)
-
-// assume e^(-x^2) is 0 outside this many std devs
-#define GAUSS_LIMIT 4
-#define GAUSS_LIMIT_UINT (GAUSS_LIMIT<<16)
-
-#define FP_1_0 (1<<16)
-#define FP_0_25 (1<<14)
-
 // calculate e^(-input)
 uint32_t fixed_point_exp(uint32_t input)
 {
@@ -32,11 +22,24 @@ uint32_t fixed_point_exp(uint32_t input)
     return result;
 }
 
+static uint32_t safe_multiply(uint32_t a, uint32_t b) {
+    uint scale = 0;
+    while (a >= FP_1_0) {
+        scale += 1;
+        a = a>>1;
+    }
+    while (b >= FP_1_0) {
+        scale += 1;
+        b = b>>1;
+    }
+    return (a*b)>>(16-scale);
+}
+
 // calculate e^(-input^2)
 uint32_t fixed_point_gaussian(uint32_t input)
 {
     if (input >= GAUSS_LIMIT_UINT) return 0;
-    const uint32_t input_sq = (input * input) >> 16;
+    const uint32_t input_sq = safe_multiply(input, input);
     return fixed_point_exp(input_sq);
 }
 
@@ -65,15 +68,17 @@ mp_obj_t tsync_fixed_point_gaussian(mp_obj_t input_obj) {
 }
 MP_DEFINE_CONST_FUN_OBJ_1(tsync_fixed_point_gaussian_obj, tsync_fixed_point_gaussian);
 
+const uint32_t TUBE_STEP = FP_1_0/N_TUBES;
 
-static void update_single_hand(uint16_t pos, uint32_t k, uint32_t A)
+static void update_single_hand(uint32_t pos, uint32_t k, uint32_t A)
 {
-    const uint32_t x_hand = (uint32_t)pos * N_TUBES;
+    uint32_t tube_frac = 0;
     for (uint32_t tube = 0; tube < N_TUBES; tube++) {
-        // calcualte x_tube = k*abs(tube - hand)
-        uint32_t x_tube = tube << 16;
-        x_tube = x_tube > x_hand ? x_tube - x_hand : x_hand - x_tube;
-        x_tube = (x_tube * k) >> 16;
+        // calculate x_tube = k*abs(tube - hand)
+        uint32_t x_tube = tube_frac > pos ? tube_frac - pos : pos - tube_frac;
+        if (x_tube >= FP_0_5) x_tube = FP_1_0 - x_tube;
+        x_tube = safe_multiply(x_tube, k);
+        tube_frac += TUBE_STEP;  // update for the next iteration
 
         // will return 0 from fixed_point_exp anyway
         if (x_tube >= GAUSS_LIMIT_UINT) continue;
@@ -81,7 +86,7 @@ static void update_single_hand(uint16_t pos, uint32_t k, uint32_t A)
         // result = e^(-k*(tube-hand)^2)
         uint32_t result = fixed_point_gaussian(x_tube);
         // result = Ae^(-k*(tube-hand)^2)
-        result = (result * A) >> 16;
+        result = safe_multiply(result, A);
         // result = min(Ae^(-k*(tube-hand)^2), 1.0)    (may have A>1)
         if (result > FP_1_0) result = FP_1_0;
         // update the maximum
@@ -92,11 +97,13 @@ static void update_single_hand(uint16_t pos, uint32_t k, uint32_t A)
 // hand_flags byte = .....HMS
 void update_pwm_raw_from_hands(uint8_t hand_flags)
 {
-    memset(pwm_raw, 0, sizeof(uint32_t) * N_TUBES);
+    for (uint t = 0; t < N_TUBES; t++) {
+        pwm_raw[t] = 0;
+    }
     for (uint h = 0; h < N_HANDS; h++)
     {
         if (hand_flags & 1) {
-            update_single_hand(hand_pos[h], hand_k[h], hand_A[h]);
+            update_single_hand((uint32_t)hand_pos[h], hand_k[h], hand_A[h]);
         }
         hand_flags = hand_flags >> 1;
     }
@@ -121,7 +128,9 @@ static mp_obj_t tsync_update_pwm_raw_from_hands(mp_uint_t n_args, const mp_obj_t
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(tsync_update_pwm_raw_from_hands_obj, 0, 1, tsync_update_pwm_raw_from_hands);
 
 void update_pwm_raw_from_single_gaussian(uint16_t pos, uint32_t k, uint32_t A) {
-    memset(pwm_raw, 0, sizeof(uint32_t) * N_TUBES);
+    for (uint t = 0; t < N_TUBES; t++) {
+        pwm_raw[t] = 0;
+    }
     update_single_hand(pos, k, A);
 }
 static mp_obj_t tsync_update_pwm_raw_from_single_gaussian(mp_obj_t pos_obj, mp_obj_t k_obj, mp_obj_t A_obj) {

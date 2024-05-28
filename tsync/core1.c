@@ -9,7 +9,9 @@
 GLOBAL_FLAG(is_primary);
 GLOBAL_FLAG_RO(core1_running);
 GLOBAL_FLAG(core1_cancel);
-GLOBAL_FLAG(manual_draw);
+GLOBAL_FLAG(manual_hand_pos);
+GLOBAL_FLAG(manual_pwm_raw);
+GLOBAL_FLAG(manual_pwm_duty);
 GLOBAL_RO_INT(rx_errors);
 GLOBAL_RO_INT(frame_rate);
 
@@ -44,43 +46,62 @@ static void core1_cleanup(void)
     core1_running = false;
 }
 
-static void core1_primary(void)
-{
-    while (!core1_cancel)
-    {
-        if (!manual_draw) {
-            // update time from RTC/ticks_us
-            update_time();
-            // update hand_pos from time
-            update_hand_pos();
-            // update pwm_raw from hand_pos
-            update_pwm_raw_from_hands(DEFAULT_HAND_FLAGS);
-        }
+NO_ARG_MP_FUNCTION(draw_loop_primary, {
+    // update time from RTC/ticks_us
+    update_time();
 
+    if (!manual_hand_pos) {
+        // update hand_pos from time
+        update_hand_pos();
+    }
+
+    if (!manual_pwm_raw) {
+        // update pwm_raw from hand_pos
+        update_pwm_raw_from_hands(DEFAULT_HAND_FLAGS);
+    }
+
+    if (!manual_pwm_duty) {
         // update pwm_duty from pwm_raw
         update_pwm_duty();
-        // update uart_buffer from pwm_duty
-        update_uart_tx_buffer();
-        // send uart_buffer to secondary over UART
-        uart_tx_send();
-        // apply pwm_duty to our bank of PWMs
-        paint_pwm();
-        // increment frame counter
-        count_frame();
+    }
+
+    // update i2c_buffer from pwm_duty
+    update_i2c_tx_buffer();
+    // send i2c_buffer to secondary over UART
+    i2c_tx_send();
+    // apply pwm_duty to our bank of PWMs
+    paint_pwm();
+    // increment frame counter
+    count_frame();
+})
+
+static void core1_primary(void)
+{
+    setup_pwm();
+    while (!core1_cancel)
+    {
+        draw_loop_primary();
     }
     core1_cleanup();
 }
 
+NO_ARG_MP_FUNCTION(draw_loop_secondary, {
+    // update time from RTC/ticks_us
+    update_time();
+    // update pwm_duty from UART
+    update_i2c_rx_buffer();
+    // apply pwm_duty to our bank of PWMs
+    paint_pwm();
+    // increment frame counter
+    count_frame();
+})
+
 static void core1_secondary(void)
 {
+    setup_pwm();
     while (!core1_cancel)
     {
-        // update pwm_duty from UART
-        update_uart_rx_buffer();
-        // apply pwm_duty to our bank of PWMs
-        paint_pwm();
-        // increment frame counter
-        count_frame();
+        draw_loop_secondary();
     }
     core1_cleanup();
 }
